@@ -1,0 +1,19 @@
+# Dataset folders
+datasets/
+data/
+*.zip
+*.tar
+*.tar.gz
+
+# Training outputs / checkpoints
+checkpoints/
+output_dir/
+runs/
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS / misc
+.DS_Store
