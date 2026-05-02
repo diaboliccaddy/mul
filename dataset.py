@@ -10,6 +10,8 @@ import trimesh
 import open3d as o3d
 import csv
 import re
+import tifffile as tiff
+
 from scipy.spatial import KDTree
 
 def mulsen_classes():
@@ -260,14 +262,154 @@ class TestDataset(BaseAnomalyDetectionDataset):
 
 
 
-def get_data_loader(split, class_name, img_size, args):
-    if split in ['train']:
-        dataset = TrainDataset(class_name=class_name, img_size=img_size, dataset_path=args.dataset_path)
-    elif split in ['test']:
-        dataset = TestDataset(class_name=class_name, img_size=img_size, dataset_path=args.dataset_path)
+class MVTec3DDataset(BaseAnomalyDetectionDataset):
+    def __init__(self, split, class_name, img_size, dataset_path=''):
+        super().__init__(split, class_name, img_size, dataset_path)
+        self.dataset_name = dataset_path.lower()
+        self.split = split
+        import torchvision.transforms as transforms
 
-    data_loader = DataLoader(dataset=dataset, batch_size=1, shuffle=False, num_workers=1, drop_last=False,
-                             pin_memory=True)
+        self.gt_transform = transforms.ToTensor()
+        base = os.path.join(dataset_path, class_name)
+
+        self.samples = []
+
+        if split == "train":
+            rgb_dir = os.path.join(base, "train", "good", "rgb")
+            xyz_dir = os.path.join(base, "train", "good", "xyz")
+
+            rgb_paths = sorted(glob.glob(rgb_dir + "/*.png"))
+            xyz_paths = sorted(glob.glob(xyz_dir + "/*.tiff"))
+
+            for r, x in zip(rgb_paths, xyz_paths):
+                self.samples.append((r, x, 0))  # label = good
+
+        else:  # TEST
+            test_dir = os.path.join(base, "test")
+            defect_types = os.listdir(test_dir)
+
+            for defect in defect_types:
+                rgb_dir = os.path.join(test_dir, defect, "rgb")
+                xyz_dir = os.path.join(test_dir, defect, "xyz")
+                gt_dir  = os.path.join(test_dir, defect, "gt")
+
+                rgb_paths = sorted(glob.glob(rgb_dir + "/*.png"))
+                xyz_paths = sorted(glob.glob(xyz_dir + "/*.tiff"))
+
+                for i in range(len(rgb_paths)):
+                    if defect == "good":
+                        self.samples.append((rgb_paths[i], xyz_paths[i], 0, None))
+                    else:
+                        gt_path = os.path.join(gt_dir, os.path.basename(rgb_paths[i]))
+                        self.samples.append((rgb_paths[i], xyz_paths[i], 1, gt_path))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+
+        if self.split == "train":
+            rgb_path, xyz_path, label = self.samples[idx]
+        else:
+            rgb_path, xyz_path, label, gt_path = self.samples[idx]
+
+        # -------- RGB --------
+        img = Image.open(rgb_path).convert('RGB')
+        img = self.rgb_transform(img)
+
+        import tifffile as tiff
+
+        # -------- LOAD XYZ --------
+        xyz = tiff.imread(xyz_path)  # (H, W, 3)
+
+        if len(xyz.shape) == 2:
+            xyz = np.expand_dims(xyz, axis=2)
+
+        # =========================================================
+        # 🔥 FIX 1: USE ONLY Z-CHANNEL (DEPTH)
+        # =========================================================
+        z = xyz[:, :, 2]   # (H, W)
+
+        # flatten → (N, 1)
+        points = z.reshape(-1, 1)
+
+        # → (1, N)
+        points = torch.tensor(points).T.float()
+
+        # -------- NORMALIZATION --------
+        points = points - points.mean(dim=1, keepdim=True)
+        points = points / (points.std(dim=1, keepdim=True) + 1e-6)
+
+        # 🔥 repeat to fake 3D (needed for PointNet)
+        points = points.repeat(3, 1)   # (3, N)
+
+        if points.shape[1] > 8192:
+            sampled_idx = torch.randperm(points.shape[1])[:8192]
+            points = points[:, sampled_idx]
+        else:
+            sampled_idx = None
+
+        # -------- FAKE INFRA --------
+        infra = torch.zeros_like(img)
+
+        if self.split == "train":
+            return (img, infra, points), (0, 0, 0)
+
+        # -------- MASK --------
+        if label == 0:
+            mask = torch.zeros([1, img.shape[1], img.shape[2]])
+        else:
+            mask = Image.open(gt_path).convert('L')
+            mask = self.gt_transform(mask)
+            mask = torch.where(mask > 0.5, 1., .0)
+
+        label_tuple = (label, label, label)
+
+        # -------- PC GT (DATASET-AWARE) --------
+        if "mvtec" in self.dataset_name:
+            # 🔥 FIX: NO FAKE MAPPING
+            pc_mask = np.zeros(points.shape[1], dtype=np.float32)
+
+            pc_mask = torch.tensor(pc_mask)
+
+            pc_mask = torch.tensor(pc_mask, dtype=torch.float32)
+        else:
+            pc_mask = np.zeros(points.shape[1])
+
+        return (
+            (img, infra, points),
+            label_tuple,
+            (mask, mask, pc_mask),
+            (rgb_path, xyz_path, xyz_path)
+        )
+
+
+
+def get_data_loader(split, class_name, img_size, args):
+
+    # 🔥 AUTO SWITCH DATASET
+    if "mvtec_3d" in args.dataset_path.lower():
+        dataset = MVTec3DDataset(
+            split=split,
+            class_name=class_name,
+            img_size=img_size,
+            dataset_path=args.dataset_path
+        )
+    else:
+        if split in ['train']:
+            dataset = TrainDataset(class_name=class_name, img_size=img_size, dataset_path=args.dataset_path)
+        elif split in ['test']:
+            dataset = TestDataset(class_name=class_name, img_size=img_size, dataset_path=args.dataset_path)
+
+    data_loader = DataLoader(
+        dataset=dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=1,
+        drop_last=False,
+        pin_memory=True
+    )
+
     return data_loader
 
 

@@ -2,7 +2,7 @@ import torch
 from tqdm import tqdm
 import os
 from utils_loc import misc
-from feature_extractors import mulsen_features
+from fe_method import main
 import pandas as pd
 from dataset import get_data_loader
 from models.models import Model, Mlp
@@ -19,25 +19,25 @@ class Tester():
         print("SELECTED METHOD:", method)
 
         if method == 'PC+RGB+Infra+qformer':
-            self.methods['PC+RGB+Infra+qformer'] = mulsen_features.TripleRGBInfraPointFeatures(args)
+            self.methods['PC+RGB+Infra+qformer'] = main.TripleRGBInfraPointFeatures(args)
 
         elif method == 'PC+RGB+qformer':
-            self.methods['PC+RGB+qformer'] = mulsen_features.PCRGBGatingFeatures(args)
+            self.methods['PC+RGB+qformer'] = main.PCRGBFeatures(args)
 
         elif method == 'PC+Infra+qformer':
-            self.methods['PC+Infra+qformer'] = mulsen_features.PCInfraGatingFeatures(args)
+            self.methods['PC+Infra+qformer'] = main.PCInfraFeatures(args)
 
         elif method == 'RGB+Infra+qformer':
-            self.methods['RGB+Infra+qformer'] = mulsen_features.RGBInfraGatingFeatures(args)
+            self.methods['RGB+Infra+qformer'] = main.RGBInfraFeatures(args)
 
         elif method == 'RGB':
-            self.methods['RGB'] = mulsen_features.RGBFeatures(args)
+            self.methods['RGB'] = main.RGBFeatures(args)
 
         elif method == 'Infra':
-            self.methods['Infra'] = mulsen_features.InfraFeatures(args)
+            self.methods['Infra'] = main.InfraFeatures(args)
 
         elif method == 'PC':
-            self.methods['PC'] = mulsen_features.PCFeatures(args)
+            self.methods['PC'] = main.PCFeatures(args)
 
         else:
             raise ValueError(f"❌ Unknown method_name: '{method}'")
@@ -52,7 +52,7 @@ class Tester():
             args=self.args
         )
 
-        print(f'Extracting train features for class {class_name}')
+        print(f'Training for class {class_name}')
 
         for batch in train_loader:
 
@@ -117,7 +117,7 @@ class Tester():
         pc_paths = []
 
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc=f'Extracting test features for class {class_name}'):
+            for batch in tqdm(test_loader, desc=f'Testing for class {class_name}'):
 
                 # -------- UNIVERSAL UNPACK --------
                 if len(batch) == 4:
@@ -171,13 +171,13 @@ class Tester():
 
         metrics_df = pd.DataFrame(metrics_data)
 
-        # prediction maps
-        # if "RGB" in self.args.method_name:
-        #     method.save_prediction_maps(output_dir, rgb_paths, infra_paths, pc_paths, save_num=10, mode="rgb")
-        # if "PC" in self.args.method_name:
-        #     method.save_prediction_maps(output_dir, rgb_paths, infra_paths, pc_paths, save_num=10, mode="xyz")
-        # if "Infra" in self.args.method_name:
-        #     method.save_prediction_maps(output_dir, rgb_paths, infra_paths, pc_paths, save_num=10, mode="infra")
+
+        if "RGB" in self.args.method_name:
+            method.save_prediction_maps(output_dir, rgb_paths, infra_paths, pc_paths, save_num=10, mode="rgb")
+        if "PC" in self.args.method_name:
+            method.save_prediction_maps(output_dir, rgb_paths, infra_paths, pc_paths, save_num=10, mode="xyz")
+        if "Infra" in self.args.method_name:
+            method.save_prediction_maps(output_dir, rgb_paths, infra_paths, pc_paths, save_num=10, mode="infra")
 
 
         return metrics_df

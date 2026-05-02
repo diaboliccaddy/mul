@@ -3,7 +3,10 @@ import torch.nn as nn
 import timm
 from timm.models.layers import DropPath, trunc_normal_
 from pointnet2_ops import pointnet2_utils
-from knn_cuda import KNN
+def knn_torch(x, y, k):
+    dist = torch.cdist(y, x)  # (B, G, N)
+    idx = dist.topk(k=k, largest=False)[1]
+    return None, idx
 
 
 class Model(torch.nn.Module):
@@ -61,15 +64,25 @@ def fps(data, number):
         number int
     '''
     fps_idx = pointnet2_utils.furthest_point_sample(data, number)
-    fps_data = pointnet2_utils.gather_operation(data.transpose(1, 2).contiguous(), fps_idx).transpose(1, 2).contiguous()
+
+    # 🔥 ensure correct dtype for CUDA op
+    fps_idx = fps_idx.int()
+
+    fps_data = pointnet2_utils.gather_operation(
+        data.transpose(1, 2).contiguous(),
+        fps_idx
+    ).transpose(1, 2).contiguous()
     return fps_data, fps_idx
+
+
+
 
 class Group(nn.Module):
     def __init__(self, num_group, group_size):
         super().__init__()
         self.num_group = num_group
         self.group_size = group_size
-        self.knn = KNN(k=self.group_size, transpose_mode=True)
+        
 
     def forward(self, xyz):
         '''
@@ -82,7 +95,7 @@ class Group(nn.Module):
         # fps the centers out
         center, center_idx = fps(xyz.contiguous(), self.num_group)  # B G 3
         # knn to get the neighborhood
-        _, idx = self.knn(xyz, center)  # B G M
+        _, idx = knn_torch(xyz, center, self.group_size)
         assert idx.size(1) == self.num_group
         assert idx.size(2) == self.group_size
         ori_idx = idx

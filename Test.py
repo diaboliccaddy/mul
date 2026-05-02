@@ -26,7 +26,7 @@ https://github.com/amazon-science/patchcore-inspection
 # SOFTWARE.
 
 """
-
+import time
 import argparse
 from runner import Tester
 from dataset import mulsen_classes
@@ -53,7 +53,48 @@ def run_3d_ads(args):
         output_dir = os.path.join(args.output_dir, cls)
       
         model = Tester(args)
+
+        # ===================================
+        # PARAMETER COUNT
+        # ===================================
+
+        try:
+            count_parameters(model.model)
+        except:
+            try:
+                count_parameters(model)
+            except:
+                print("Could not count parameters.")
+
         model.fit(cls)
+        # ===================================
+        # INFERENCE TIME
+        # ===================================
+
+        try:
+
+            test_loader = model.test_loader
+
+            sample = next(iter(test_loader))[0]
+
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+            try:
+                measure_inference_time(
+                    model.model,
+                    sample,
+                    device
+                )
+            except:
+                measure_inference_time(
+                    model,
+                    sample,
+                    device
+                )
+
+        except Exception as e:
+
+            print(f"Could not measure inference time: {e}")
      
         torch.cuda.empty_cache()
   
@@ -98,6 +139,74 @@ def set_random_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False 
 
+def count_parameters(model):
+
+    total_params = sum(
+        p.numel() for p in model.parameters()
+    )
+
+    trainable_params = sum(
+        p.numel() for p in model.parameters()
+        if p.requires_grad
+    )
+
+    print("\n===================================")
+    print("MODEL PARAMETERS")
+    print("===================================")
+
+    print(f"Total Parameters     : {total_params:,}")
+    print(f"Trainable Parameters : {trainable_params:,}")
+
+    return total_params, trainable_params
+
+
+def measure_inference_time(model, sample, device, repeats=50):
+
+    model.eval()
+
+    rgb = sample[0].to(device)
+    infra = sample[1].to(device)
+    pc = sample[2].to(device)
+
+    timings = []
+
+    # -------- WARMUP --------
+    with torch.no_grad():
+
+        for _ in range(10):
+
+            _ = model(rgb, infra, pc)
+
+    # -------- TIMING --------
+    with torch.no_grad():
+
+        for _ in range(repeats):
+
+            torch.cuda.synchronize()
+
+            start = time.time()
+
+            _ = model(rgb, infra, pc)
+
+            torch.cuda.synchronize()
+
+            end = time.time()
+
+            timings.append(end - start)
+
+    avg_time = np.mean(timings)
+
+    fps = 1.0 / avg_time
+
+    print("\n===================================")
+    print("INFERENCE SPEED")
+    print("===================================")
+
+    print(f"Average inference time : {avg_time*1000:.2f} ms")
+    print(f"FPS                    : {fps:.2f}")
+
+    return avg_time, fps
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process some integers.')
 
@@ -106,8 +215,8 @@ if __name__ == '__main__':
     parser.add_argument('--memory_bank', default='multiple', type=str,
                         choices=["multiple", "single"],
                         help='memory bank mode: "multiple", "single".')
-    parser.add_argument('--rgb_backbone_name', default='vit_base_patch8_224_dino', type=str, 
-                        choices=['vit_base_patch8_224_dino', 'vit_base_patch8_224', 'vit_base_patch8_224_in21k', 'vit_small_patch8_224_dino'],
+    parser.add_argument('--rgb_backbone_name', default='vit_base_patch8_224.dino', type=str, 
+                        choices=['vit_base_patch8_224.dino', 'vit_base_patch8_224', 'vit_base_patch8_224_in21k', 'vit_small_patch8_224.dino'],
                         help='Timm checkpoints name of RGB backbone.')
     parser.add_argument('--xyz_backbone_name', default='Point_MAE', type=str, choices=['Point_MAE', 'Point_Bert'],
                         help='Checkpoints name of RGB backbone[Point_MAE, Point_Bert].')
